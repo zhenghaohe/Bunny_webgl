@@ -551,12 +551,12 @@ let
   cubeRotating = false,
   coneRotating = false,
   shininess = 5,
-  clearColor = [0.9, 0.9, 0.9],
-  lightColor = [0.98, 0.88, 0.18, 1],
+  clearColor = [0.9, 0.85, 0.85],
+  lightColor = [1, 1, 1, 1],
   lightAmbient = [0.13, 0.13, 0.13, 1],
   lightSpecular = [0.64, 0.64, 0.64, 1],
   lightDirection = [-0.25, -0.25, -0.25],
-  materialDiffuse = [0.92, 0.90, 0.64, 1],
+  materialDiffuse = [46 / 256, 99 / 256, 191 / 256, 1],
   materialAmbient = [1, 1, 1, 1],
   materialSpecular = [0.88, 0.88, 0.88, 1];
 
@@ -732,39 +732,6 @@ function draw() {
     // draw bunny
     gl.bindVertexArray(bunnyVAO);
     gl.drawElements(gl.TRIANGLES, bunnyIndices.length, gl.UNSIGNED_SHORT,0);
-
-    // draw cube
-    gl.bindVertexArray(cubeVAO);
-
-    cubeModelViewMatrix = mathHelper.identity(mathHelper.createIdentityMat4());
-    mathHelper.rotate(cubeModelViewMatrix, cubeModelViewMatrix, angleCube * Math.PI / 180, [0,1,0]);
-    mathHelper.translate(cubeModelViewMatrix, cubeModelViewMatrix, CUBE_HOME_POSITION);
-    mathHelper.multiply(cubeModelViewMatrix, cubeModelViewMatrix, cameraMatrix);
-
-    gl.uniform3fv(program.uLightDirection, [
-      -cubeModelViewMatrix[12],
-      -cubeModelViewMatrix[13],
-      cubeModelViewMatrix[14]>0 ? cubeModelViewMatrix[14]/20 : cubeModelViewMatrix[14],
-    ]);
-
-    gl.uniformMatrix4fv(program.uModelViewMatrix, false, cubeModelViewMatrix);
-
-    gl.drawElements(gl.LINES, cubeIndices.length, gl.UNSIGNED_SHORT, 0);
-
-    // draw cone
-    gl.bindVertexArray(coneVAO);
-    coneModelViewMatrix = mathHelper.identity(mathHelper.createIdentityMat4());
-
-    mathHelper.translate(coneModelViewMatrix, coneModelViewMatrix, CONE_HOME_POSITION);
-    mathHelper.rotate(coneModelViewMatrix, coneModelViewMatrix, 90 * Math.PI / 180, [0, 0, 1]);
-    mathHelper.multiply(coneModelViewMatrix, coneModelViewMatrix, cameraMatrix);
-    mathHelper.scale(coneModelViewMatrix ,coneModelViewMatrix, [0.2,0.2,0.2]);
-
-    mathHelper.rotate(coneModelViewMatrix, coneModelViewMatrix, angleCone * Math.PI / 180, [0, 0, 1]);
-
-    gl.uniformMatrix4fv(program.uModelViewMatrix, false, coneModelViewMatrix);
-
-    gl.drawElements(gl.LINE_LOOP, coneIndices.length, gl.UNSIGNED_SHORT, 0);
   }
 
   catch (error) {
@@ -799,11 +766,69 @@ function render() {
   draw();
 }
 
+function initControls() {
+  utils.configureControls({
+    'Light Color': {
+      value: utils.denormalizeColor(lightColor),
+      onChange: v => gl.uniform4fv(program.uLightDiffuse, utils.normalizeColor(v))
+    },
+    'Light Ambient Term': {
+      value: lightAmbient[0],
+      min: 0, max: 1, step: 0.01,
+      onChange: v => gl.uniform4fv(program.uLightAmbient, [v, v, v, 1])
+    },
+    'Light Specular Term': {
+      value: lightSpecular[0],
+      min: 0, max: 1, step: 0.01,
+      onChange: v => gl.uniform4fv(program.uLightSpecular, [v, v, v, 1])
+    },
+    // Spread all values from the reduce onto the controls
+    ...['Translate X', 'Translate Y', 'Translate Z'].reduce((result, name, i) => {
+      result[name] = {
+        value: lightDirection[i],
+        min: -10, max: 10, step: -0.1,
+        onChange(v, state) {
+          gl.uniform3fv(program.uLightDirection, [
+            -state['Translate X'],
+            -state['Translate Y'],
+            state['Translate Z']
+          ]);
+        }
+      };
+      return result;
+    }, {}),
+    'Bunny Color': {
+      value: utils.denormalizeColor(materialDiffuse),
+      onChange: v => gl.uniform4fv(program.uMaterialDiffuse, utils.normalizeColor(v))
+    },
+    'Material Ambient Term': {
+      value: materialAmbient[0],
+      min: 0, max: 1, step: 0.01,
+      onChange: v => gl.uniform4fv(program.uMaterialAmbient, [v, v, v, 1])
+    },
+    'Material Specular Term': {
+      value: materialSpecular[0],
+      min: 0, max: 1, step: 0.01,
+      onChange: v => gl.uniform4fv(program.uMaterialSpecular, [v, v, v, 1])
+    },
+    Shininess: {
+      value: shininess,
+      min: 0, max: 50, step: 0.1,
+      onChange: v => gl.uniform1f(program.uShininess, v)
+    },
+    Background: {
+      value: utils.denormalizeColor(clearColor),
+      onChange: v => gl.clearColor(...utils.normalizeColor(v), 1)
+    },
+  });
+}
+
 function init() {
   initProgram();
   initBuffers();
   initLights();
   render();
+  initControls();
 }
 
 window.onload = init;
