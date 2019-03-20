@@ -1,0 +1,468 @@
+<html>
+
+<head>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.5/dat.gui.min.js"></script>
+    <script type="text/javascript" src="bunny.js"></script>
+    <script type="text/javascript" src="bunny2.js"></script>
+  <script type="text/javascript" src="utils.js"></script>
+
+  <!-- vertex Shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">
+    #version 300 es
+    precision mediump float;
+
+    uniform mat4 uModelViewMatrix;
+    uniform mat4 uProjectionMatrix;
+    uniform mat4 uNormalMatrix;
+
+    in vec3 aVertexPosition;
+    in vec3 aVertexNormal;
+
+    out vec3 vNormal;
+    out vec3 vEyeVector;
+
+    void main(void) {
+      vec4 vertex = uModelViewMatrix * vec4(aVertexPosition, 1.0);
+      // Set varyings to be used inside of fragment shader
+      vNormal = vec3(uNormalMatrix * vec4(aVertexNormal, 1.0));
+      vEyeVector = -vec3(vertex.xyz);
+      gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aVertexPosition, 1.0);
+    }
+  </script>
+
+  <!-- fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">
+    #version 300 es
+    precision mediump float;
+
+    uniform float uShininess;
+    uniform vec3 uLightDirection;
+    uniform vec4 uLightAmbient;
+    uniform vec4 uLightDiffuse;
+    uniform vec4 uLightSpecular;
+    uniform vec4 uMaterialAmbient;
+    uniform vec4 uMaterialDiffuse;
+    uniform vec4 uMaterialSpecular;
+
+    in vec3 vNormal;
+    in vec3 vEyeVector;
+
+    out vec4 fragColor;
+
+    void main(void) {
+      // Normalized light direction
+      vec3 L = normalize(uLightDirection);
+
+      // Normalized normal
+      vec3 N = normalize(vNormal);
+
+      float lambertTerm = dot(N, -L);
+      // Ambient
+      vec4 Ia = uLightAmbient * uMaterialAmbient;
+      // Diffuse
+      vec4 Id = vec4(0.0, 0.0, 0.0, 1.0);
+      // Specular
+      vec4 Is = vec4(0.0, 0.0, 0.0, 1.0);
+
+      if (lambertTerm > 0.0) {
+        Id = uLightDiffuse * uMaterialDiffuse * lambertTerm;
+        vec3 E = normalize(vEyeVector);
+        vec3 R = reflect(L, N);
+        float specular = pow( max(dot(R, E), 0.0), uShininess);
+        Is = uLightSpecular * uMaterialSpecular * specular;
+      }
+
+      // Final fargment color takes into account all light values that
+      // were computed within the fragment shader
+      fragColor = vec4(vec3(Ia + Id + Is), 1.0);
+    }
+  </script>
+
+  <script type="text/javascript">
+    'use strict';
+
+    let
+      gl,
+      program,
+      modelViewMatrix = mat4.create(),
+      projectionMatrix = mat4.create(),
+      normalMatrix = mat4.create(),
+      cameraMatrix = mat4.create(),
+      bunnyVAO,
+      cubeVAO,
+      coneVAO,
+      indices,
+      indices2,
+      coneIndicesBuffer,
+      sphereIndicesBuffer,
+      cubeModelViewMatrix,
+      lastTime,
+        BUNNY_HOME_POSITION = [0, 0, 0],
+        CUBE_HOME_POSITION = [5,5,0],
+        position = [0, 0, 0],
+        currentX,
+        currentY,
+        lastX,
+        lastY,
+        dragging,
+      angleX = 0,
+        angleY = 0,
+        angleCube = 0,
+        bunnyRotationRate = 0,
+        cubeRotationRate = 0,
+        cubeRotating = false,
+        shininess = 10,
+      clearColor = [0.9, 0.85, 0.85],
+      lightColor = [1, 1, 1, 1],
+      lightAmbient = [0.03, 0.03, 0.03, 1],
+      lightSpecular = [1, 1, 1, 1],
+      lightDirection = [-0.25, -0.25, -0.25],
+      materialDiffuse = [46 / 256, 99 / 256, 191 / 256, 1],
+      materialAmbient = [1, 1, 1, 1],
+      materialSpecular = [1, 1, 1, 1];
+
+    function initProgram() {
+      // Configure `canvas`
+      const canvas = utils.getCanvas('webgl-canvas');
+      utils.autoResizeCanvas(canvas);
+
+      // Configure `gl`
+      gl = utils.getGLContext(canvas);
+      gl.clearColor(...clearColor, 1);
+      gl.clearDepth(100);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+
+      // Shader source
+      const vertexShader = utils.getShader(gl, 'vertex-shader');
+      const fragmentShader = utils.getShader(gl, 'fragment-shader');
+
+      // Configure `program`
+      program = gl.createProgram();
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+      gl.linkProgram(program);
+
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error('Could not initialize shaders');
+      }
+
+      gl.useProgram(program);
+
+      // Set locations onto `program` instance
+      program.aVertexPosition = gl.getAttribLocation(program, 'aVertexPosition');
+      program.aVertexNormal = gl.getAttribLocation(program, 'aVertexNormal');
+      program.uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
+      program.uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
+      program.uNormalMatrix = gl.getUniformLocation(program, 'uNormalMatrix');
+      program.uMaterialAmbient = gl.getUniformLocation(program, 'uMaterialAmbient');
+      program.uMaterialDiffuse = gl.getUniformLocation(program, 'uMaterialDiffuse');
+      program.uMaterialSpecular = gl.getUniformLocation(program, 'uMaterialSpecular');
+      program.uShininess = gl.getUniformLocation(program, 'uShininess');
+      program.uLightAmbient = gl.getUniformLocation(program, 'uLightAmbient');
+      program.uLightDiffuse = gl.getUniformLocation(program, 'uLightDiffuse');
+      program.uLightSpecular = gl.getUniformLocation(program, 'uLightSpecular');
+      program.uLightDirection = gl.getUniformLocation(program, 'uLightDirection');
+
+       document.addEventListener('keydown', event => keyDown(event), false);
+       canvas.onmousedown = event => onMouseDown(event);
+       canvas.onmouseup = event => onMouseUp(event);
+       canvas.onmousemove = event => onMouseMove(event);
+    }
+    function onMouseDown(event) {
+        dragging = true;
+        currentX = event.clientX;
+        currentY = event.clientY;
+    }
+
+    function onMouseMove(event) {
+        if(dragging) {
+            lastX = currentX;
+            lastY = currentY;
+
+            currentX = event.clientX;
+            currentY = event.clientY;
+
+            const dx = currentX - lastX;
+            const dy = currentY - lastY;
+
+            if(Math.abs(dx)>1) {
+                angleX += dx;
+            }
+            if(Math.abs(dy)>1) {
+                angleY += dy;
+            }
+
+        }
+
+
+    }
+
+    function onMouseUp() {
+        console.log('onMouseUp');
+        dragging = false;
+
+    }
+
+
+
+    function keyDown(event) {
+        let dir = '';
+
+        switch(event.key) {
+            case 'ArrowUp':
+                position = position.map((vertex, index) => index===1 ? vertex+0.1 : vertex);
+                break;
+            case 'ArrowDown':
+                position = position.map((vertex, index) => index===1 ? vertex-0.1 : vertex);
+                break;
+            case 'ArrowRight':
+                position = position.map((vertex, index) => index===0 ? vertex+0.1 : vertex);
+                break;
+            case 'ArrowLeft':
+                position = position.map((vertex, index) => index===0 ? vertex-0.1 : vertex);
+                break;
+            case '[':
+                position = position.map((vertex, index) => index===2 ? vertex+0.1 : vertex);
+                break;
+            case ']':
+                position = position.map((vertex, index) => index===2 ? vertex-0.1 : vertex);
+                break;
+            case 'r':
+                position = BUNNY_HOME_POSITION;
+                angleX = 0;
+                angleY = 0;
+                cubeRotationRate = 0;
+                angleCube = 0;
+                cubeRotating = false;
+                break;
+            case 'p':
+                if(cubeRotating) {
+                    cubeRotationRate = 0;
+                    cubeRotating = false;
+                } else {
+                    cubeRotationRate = 200;
+                    cubeRotating = true;
+                }
+
+        }
+    }
+
+
+    // Configure lights
+    function initLights() {
+      gl.uniform4fv(program.uLightDiffuse, lightColor);
+      gl.uniform4fv(program.uLightAmbient, lightAmbient);
+      gl.uniform4fv(program.uLightSpecular, lightSpecular);
+      gl.uniform3fv(program.uLightDirection, lightDirection);
+      gl.uniform4fv(program.uMaterialDiffuse, materialDiffuse);
+      gl.uniform4fv(program.uMaterialAmbient, materialAmbient);
+      gl.uniform4fv(program.uMaterialSpecular, materialSpecular);
+      gl.uniform1f(program.uShininess, shininess);
+    }
+
+    function initBuffers() {
+        const vertices = all_args;
+        // Inline indices.
+        indices = all_args2;
+      const normals = utils.calculateNormals(vertices, indices);
+
+      // Create VAO
+      bunnyVAO = gl.createVertexArray();
+        cubeVAO = gl.createVertexArray();
+        coneVAO = gl.createVertexArray();
+
+      // Bind VAO
+      gl.bindVertexArray(bunnyVAO);
+
+      // Vertices
+      const sphereVerticesBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+      // Configure VAO instructions
+      gl.enableVertexAttribArray(program.aVertexPosition);
+      gl.vertexAttribPointer(program.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+      // Normals
+      const sphereNormalsBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, sphereNormalsBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+      // Configure VAO instructions
+      gl.enableVertexAttribArray(program.aVertexNormal);
+      gl.vertexAttribPointer(program.aVertexNormal, 3, gl.FLOAT, false, 0, 0);
+
+      // Indices
+      sphereIndicesBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, sphereIndicesBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+      // Clean
+      gl.bindVertexArray(null);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        const vertices2 = [
+            0.25, 0.25, -1.75, 0.25, 0.75, -1.75, 0.75, 0.25, -1.75, 0.75, 0.75, -1.75, 0.25, 0.25, -2.25, 0.25, 0.75, -2.25, 0.75, 0.25, -2.25, 0.75, 0.75, -2.25];
+        console.log('vertices2', vertices2);
+        indices2 = [0, 1, 1, 3, 3, 2, 2, 0, 4, 6, 6, 7, 7, 5, 5, 4, 1,5 , 0, 4, 2, 6, 3, 7];
+
+        gl.bindVertexArray(coneVAO);
+
+        const coneVerticesBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, coneVerticesBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices2), gl.STATIC_DRAW);
+        // Configure VAO instructions
+        gl.enableVertexAttribArray(program.aVertexPosition);
+        gl.vertexAttribPointer(program.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+
+        // Indices
+        coneIndicesBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, coneIndicesBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices2), gl.STATIC_DRAW);
+
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+    }
+
+    function draw() {
+      gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      mat4.perspective(projectionMatrix, 45, gl.canvas.width / gl.canvas.height, 0.1, 10000);
+      mat4.identity(modelViewMatrix);
+        mat4.identity(cameraMatrix);
+
+        mat4.translate(modelViewMatrix, modelViewMatrix, position);
+        mat4.translate(cameraMatrix, cameraMatrix, [0, 0, 10]);
+        mat4.invert(cameraMatrix,cameraMatrix);
+
+        mat4.multiply(modelViewMatrix, modelViewMatrix, cameraMatrix);
+
+        mat4.rotate(modelViewMatrix, modelViewMatrix, angleX * Math.PI / 180, [0,1,0]);
+        mat4.rotate(modelViewMatrix, modelViewMatrix, angleY * Math.PI / 180, [1,0,0]);
+
+
+        mat4.copy(normalMatrix, modelViewMatrix);
+      mat4.invert(normalMatrix, normalMatrix);
+      mat4.transpose(normalMatrix, normalMatrix);
+
+      gl.uniformMatrix4fv(program.uNormalMatrix, false, normalMatrix);
+      gl.uniformMatrix4fv(program.uModelViewMatrix, false, modelViewMatrix);
+      gl.uniformMatrix4fv(program.uProjectionMatrix, false, projectionMatrix);
+
+      // We will start using the `try/catch` to capture any errors from our `draw` calls
+      try {
+        // Bind
+        gl.bindVertexArray(bunnyVAO);
+
+        // Draw
+        gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT,0);
+
+
+      }
+      // We catch the `error` and simply output to the screen for testing/debugging purposes
+      catch (error) {
+        console.error(error);
+      }
+    }
+
+    // Simple animation function for changing the angle
+    function animate() {
+      let timeNow = new Date().getTime();
+      if (lastTime) {
+        const elapsed = timeNow - lastTime;
+        angleX += (bunnyRotationRate * elapsed) / 10000.0;
+          angleCube += (cubeRotationRate * elapsed) / 10000.0;
+      }
+      lastTime = timeNow;
+    }
+
+    function render() {
+      requestAnimationFrame(render);
+      // We call animate on every rendering cycle
+      animate();
+      draw();
+    }
+
+    function init() {
+      initProgram();
+      initBuffers();
+      initLights();
+      render();
+
+      initControls();
+    }
+
+    function initControls() {
+      utils.configureControls({
+        'Light Color': {
+          value: utils.denormalizeColor(lightColor),
+          onChange: v => gl.uniform4fv(program.uLightDiffuse, utils.normalizeColor(v))
+        },
+        'Light Ambient Term': {
+          value: lightAmbient[0],
+          min: 0, max: 1, step: 0.01,
+          onChange: v => gl.uniform4fv(program.uLightAmbient, [v, v, v, 1])
+        },
+        'Light Specular Term': {
+          value: lightSpecular[0],
+          min: 0, max: 1, step: 0.01,
+          onChange: v => gl.uniform4fv(program.uLightSpecular, [v, v, v, 1])
+        },
+        // Spread all values from the reduce onto the controls
+        ...['Translate X', 'Translate Y', 'Translate Z'].reduce((result, name, i) => {
+          result[name] = {
+            value: lightDirection[i],
+            min: -10, max: 10, step: -0.1,
+            onChange(v, state) {
+              gl.uniform3fv(program.uLightDirection, [
+                -state['Translate X'],
+                -state['Translate Y'],
+                state['Translate Z']
+              ]);
+            }
+          };
+          return result;
+        }, {}),
+        'Sphere Color': {
+          value: utils.denormalizeColor(materialDiffuse),
+          onChange: v => gl.uniform4fv(program.uMaterialDiffuse, utils.normalizeColor(v))
+        },
+        'Material Ambient Term': {
+          value: materialAmbient[0],
+          min: 0, max: 1, step: 0.01,
+          onChange: v => gl.uniform4fv(program.uMaterialAmbient, [v, v, v, 1])
+        },
+        'Material Specular Term': {
+          value: materialSpecular[0],
+          min: 0, max: 1, step: 0.01,
+          onChange: v => gl.uniform4fv(program.uMaterialSpecular, [v, v, v, 1])
+        },
+        Shininess: {
+          value: shininess,
+          min: 0, max: 50, step: 0.1,
+          onChange: v => gl.uniform1f(program.uShininess, v)
+        },
+        Background: {
+          value: utils.denormalizeColor(clearColor),
+          onChange: v => gl.clearColor(...utils.normalizeColor(v), 1)
+        },
+      });
+    }
+
+    window.onload = init;
+  </script>
+</head>
+
+<body>
+
+  <canvas id="webgl-canvas">
+    Your browser does not support the HTML5 canvas element.
+  </canvas>
+
+</body>
+</html>
